@@ -4,6 +4,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import tensorflowjs as tfjs
 import requests as _requests
 import matplotlib.pyplot as plt
 
@@ -399,3 +400,6 @@ class Predictor():
         plt.xticks(self.df_result.index, self.df_result["md"])
         plt.legend(fontsize="30")
         plt.show()
+
+    def saveModelToJS(self):
+        tfjs.converters.save_keras_model(self.model, "kospi_predictor_model/saved_model_js")
