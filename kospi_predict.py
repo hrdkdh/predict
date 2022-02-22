@@ -29,6 +29,7 @@ class Crawler():
         perPage : 한 페이지에 몆 건까지 출력할 것인가
         """
         self.df = None
+        self.df_investor = None
         self.crawl_page_max = crawl_page_max
         self.info_for_crawl = {
             "KOSPI" : {
@@ -102,43 +103,76 @@ class Crawler():
                     {"col" : "date", "item_key" : "date" },
                     {"col" : "SHANGHAI", "item_key" : "tradePrice" }
                 ]
+            },
+            "INDI" : {
+                "url" : "https://finance.daum.net/api/investor/KOSPI/days",
+                "param" : {
+                    "market": "KOSPI",
+                    "perPage" : perPage,
+                    "fieldName": "changeRate",
+                    "order": "desc",
+                    "details": "true",
+                    "pagination": "true",
+                },
+                "map_for_df" : [
+                    {"col" : "date", "item_key" : "date" },
+                    {"col" : "INDI", "item_key" : "individualStraightPurchasePrice" },
+                    {"col" : "FOREIGN", "item_key" : "foreignStraightPurchasePrice" },
+                    {"col" : "ORG", "item_key" : "institutionStraightPurchasePrice" }
+                ]
             }
         }
 
-    def crawlData(self, wantDataNames):
+    def crawlData(self, want_data_names):
         header = {
             "referer": "https://finance.daum.net",
             "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
         }
-        if type(wantDataNames) != list:
-            wantDataNames = [wantDataNames]
+        if type(want_data_names) != list:
+            want_data_names = [want_data_names]
         
-        for wandDataName in wantDataNames:
+        for want_data_name in want_data_names:
+            want_data_name_for_print = want_data_name
+            if want_data_name in ["FOREIGN", "ORG"]:
+                want_data_name = "INDI"
             result = []
-            url = self.info_for_crawl[wandDataName]["url"]
-            param = self.info_for_crawl[wandDataName]["param"]
+            url = self.info_for_crawl[want_data_name]["url"]
+            param = self.info_for_crawl[want_data_name]["param"]
             for page_no in range(1, self.crawl_page_max+1):
                 print_prefix = ""
                 if page_no == 1:
                     print_prefix = "\n"
 
-                print("{}{} : {}번째 페이지 데이터 수집중...".format(print_prefix, wandDataName, page_no), end="\r")
+                print("{}{} : {}번째 페이지 데이터 수집중...".format(print_prefix, want_data_name_for_print, page_no), end="\r")
+                
+                if self.df_investor is not None:
+                    continue
+                
                 param["page"] = page_no
                 res = _requests.get(url, headers=header, params=param)
                 json_parsed = res.json()
                 for item in json_parsed["data"]:
                     this_dic = {}
-                    for map in self.info_for_crawl[wandDataName]["map_for_df"]:
+                    for map in self.info_for_crawl[want_data_name]["map_for_df"]:
                         this_value = item[map["item_key"]]
                         if map["col"] == "date":
                             this_value = this_value[:10]
                         this_dic[map["col"]] = this_value
                     result.append(this_dic)
-            this_df = pd.DataFrame(result)
-            if self.df is None:
-                self.df = this_df
+            if want_data_name in ["INDI", "FOREIGN", "ORG"]:
+                if self.df_investor is None:
+                    this_df = pd.DataFrame(result)
+                    self.df_investor = this_df
+                    if self.df is None:
+                        self.df = this_df
+                    else:
+                        self.df = self.df.merge(this_df, how="left", on="date")
             else:
-                self.df = self.df.merge(this_df, how="left", on="date")
+                this_df = pd.DataFrame(result)
+                if self.df is None:
+                    self.df = this_df
+                else:
+                    self.df = self.df.merge(this_df, how="left", on="date")
         return self.df
 
     def removeNan(self): #결측치를 앞뒤 일자의 평균값으로 대체
