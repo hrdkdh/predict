@@ -138,8 +138,58 @@ class Crawler():
             if self.df is None:
                 self.df = this_df
             else:
-                self.df = self.df.merge(this_df, on="date")
+                self.df = self.df.merge(this_df, how="left", on="date")
         return self.df
+
+    def removeNan(self): #결측치를 앞뒤 일자의 평균값으로 대체
+        #1. 제일 첫번째 행에 NaN 값이 하나라도 있다면 제거한다.
+        df_nan_removed = self.df.copy()
+        for item in self.df.iterrows():
+            idx = item[0]
+            if True in [v for k, v in self.df.iloc[idx].isnull().items()]:
+                df_nan_removed.drop(index=idx, inplace=True)
+            else:
+                break
+
+        #2. 제일 마지막 행에 NaN 값이 하나라도 있다면 제거한다.
+        for i in range(1, len(self.df)):
+            idx = len(self.df) - i
+            if True in [v for k, v in self.df.iloc[idx].isnull().items()]:
+                df_nan_removed.drop(index=idx, inplace=True)
+            else:
+                break
+
+        #3. 루프를 돌면서 결측치를 평균값으로 대체한다.
+        df_nan_removed.reset_index(inplace=True, drop=True)
+        for item in df_nan_removed.iterrows():
+            idx = item[0]
+            if True in [v for k, v in item[1].isnull().items()]:
+                nan_col_list = [k for k, v in item[1].isnull().items() if v is True]
+                for nan_col in nan_col_list:
+                    nan_idx = 1
+                    prev_day_price = df_nan_removed.iloc[idx+nan_idx][nan_col]
+                    while True:
+                        if str(prev_day_price) == "nan":
+                            nan_idx += 1
+                            prev_day_price = df_nan_removed.iloc[idx+nan_idx][nan_col]
+                        else:
+                            break
+
+                    next_day_price = df_nan_removed.iloc[idx-1][nan_col]
+                    while True:
+                        if str(next_day_price) == "nan":
+                            nan_idx += 1
+                            next_day_price = df_nan_removed.iloc[idx-nan_idx][nan_col]
+                        else:
+                            break
+                    average = (prev_day_price + next_day_price)/2
+                    df_nan_removed.loc[idx, nan_col] = average
+
+        for item in df_nan_removed.iterrows():
+            idx = item[0]
+            if True in [v for k, v in item[1].isnull().items()]:
+                print(item[1])
+        return df_nan_removed
 
 class DataPreprocessor():
     def __init__(self, df_crawled, cols):
