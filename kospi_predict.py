@@ -29,6 +29,7 @@ class Crawler():
         perPage : 한 페이지에 몆 건까지 출력할 것인가
         """
         self.df = None
+        self.save_file_name = "crawled_data.xlsx"
         self.df_investor = None
         self.crawl_page_max = crawl_page_max
         self.info_for_crawl = {
@@ -123,7 +124,7 @@ class Crawler():
             }
         }
 
-    def crawlData(self, want_data_names):
+    def crawlData(self, want_data_names, save=False):
         header = {
             "referer": "https://finance.daum.net",
             "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
@@ -173,6 +174,15 @@ class Crawler():
                     self.df = this_df
                 else:
                     self.df = self.df.merge(this_df, how="left", on="date")
+        if save is True:
+            self.df.to_excel(self.save_file_name)
+        return self.df
+
+    def loadFromSavedFile(self, cols):
+        df = pd.read_excel(self.save_file_name, index_col=0)
+        selected_cols = cols.copy()
+        selected_cols = ["date"] + cols
+        self.df = df.loc[:, selected_cols]
         return self.df
 
     def removeNan(self): #결측치를 앞뒤 일자의 평균값으로 대체
@@ -232,6 +242,36 @@ class DataPreprocessor():
         self.minmax_info = {}
         pass
     
+    def getOutlierDf(self, df):
+        df_outlier = df.copy()
+        df_outlier["_outlier"] = 0
+        df_outlier["_outlier_from"] = ""
+        df_outlier["_over"] = 0
+        df_outlier["_under"] = 0
+        
+        for col in self.cols:
+            q1 = df[col].quantile(.25)
+            q3 = df[col].quantile(.75)
+            iqr = q3-q1
+            iqr_under = q1 - (iqr*1.5)
+            iqr_over = q3 + (iqr*1.5)
+            df_outlier.loc[(df[col] < iqr_under), "_outlier"] = 1
+            df_outlier.loc[(df[col] < iqr_under), "_under"] = 1
+            df_outlier.loc[(df[col] < iqr_under), "_outlier_from"] = df_outlier.loc[(df[col] < iqr_under), "_outlier_from"].values + col + "(under), "
+
+            df_outlier.loc[(df[col] > iqr_over), "_outlier"] = 1
+            df_outlier.loc[(df[col] > iqr_over), "_over"] = 1
+            df_outlier.loc[(df[col] > iqr_over), "_outlier_from"] = df_outlier.loc[(self.df[col] > iqr_over), "_outlier_from"].values + col + "(over), "
+        df_outlier.drop(index=df_outlier[(df_outlier["_outlier"] == 0)].index, inplace=True)
+        return df_outlier
+
+    def removeOutlier(self):
+        df = self.df.copy()
+        df_outlier = self.getOutlierDf(df)
+        df.drop(index = df_outlier.index.to_list(), inplace=True)
+        df.reset_index(inplace = True, drop=True)
+        self.df = df
+
     def sortByDate(self):
         self.df.sort_values(by="date", inplace = True)
         self.df.reset_index(inplace = True, drop=True)
@@ -323,8 +363,11 @@ class ModelMaker():
     def _constructModel(self, learning_rate):
         self.model = tf.keras.models.Sequential([
             tf.keras.layers.Flatten(input_shape=(1, len(self.x_cols))),
+            # tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dense(len(self.x_cols)*7, activation='relu'),
             tf.keras.layers.Dense(len(self.x_cols)*7, activation='relu'),
+            tf.keras.layers.Dense(len(self.x_cols)*7, activation='relu'),
+            # tf.keras.layers.Dropout(rate=0.1),
             tf.keras.layers.Dense(len(self.x_cols)*7, activation='relu'),
             tf.keras.layers.Dense(len(self.x_cols)*7, activation='relu'),
             tf.keras.layers.Dense(len(self.x_cols)*7, activation='relu'),
