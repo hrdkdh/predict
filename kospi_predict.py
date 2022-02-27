@@ -376,7 +376,8 @@ class DataPreprocessor():
         self.df_test = df_splited[1]
 
 class ModelMaker():
-    def __init__(self, y_cols, df_train, df_test):
+    def __init__(self, y_cols, df_train, df_test, save_path="saved_model"):
+        self.save_path = save_path
         self.df_train = df_train.copy()
         self.df_test = df_test.copy()
         self.x_cols = [x for x in self.df_train.columns if x[:2] == "X_"]
@@ -440,12 +441,12 @@ class ModelMaker():
         self.model.load_weights(latest)
 
         print("모델 저장 완료")
-        model_file_path = "kospi_predictor_model/saved_model"
+        model_file_path = "kospi_predictor_model/{}".format(self.save_path)
         self.model.save(model_file_path, overwrite=True)
         x_cols_str = json.dumps(self.x_cols)
         y_cols_str = json.dumps(self.y_cols)
-        open("kospi_predictor_model/saved_model/x_cols_info.txt", "w").write(x_cols_str)
-        open("kospi_predictor_model/saved_model/y_cols_info.txt", "w").write(y_cols_str)
+        open("kospi_predictor_model/{}/x_cols_info.txt".format(self.save_path), "w").write(x_cols_str)
+        open("kospi_predictor_model/{}/y_cols_info.txt".format(self.save_path), "w").write(y_cols_str)
 
         self.df_history = pd.DataFrame({
             "loss" : self.history.history["loss"],
@@ -468,26 +469,35 @@ class ModelMaker():
         self.df_predicted = pd.DataFrame({
             "org" : y_test[:, y_no],
             "predicted" : predicted[:, y_no],
-            "predict error" : abs((y_test - predicted)[:, y_no])
+            "predict error" : abs((y_test - predicted)[:, y_no]),
+            "predict error(sqr)" : abs((y_test - predicted)[:, y_no]) ** 2
         })
+        self.validate_mae = self.df_predicted[:, ["predict error"]].mean()
+        self.validate_mse = self.df_predicted[:, ["predict error(sqr)"]].mean()
+        validate_str = json.dumps({
+            "validate_mae" : self.validate_mae,
+            "validate_mse" : self.validate_mse
+        })
+        open("kospi_predictor_model/{}/validate_info.txt".format(self.save_path), "w").write(validate_str)
         plt.figure(figsize=(16,8))
         plt.plot(self.df_predicted)
 
 class Predictor():
-    def __init__(self, df, scaled=True, scale_method="minmax"):
+    def __init__(self, df, scaled=True, scale_method="minmax", model_path = "saved_model"):
+        self.model_path = model_path
         self.scaled = scaled
         self.scale_method = scale_method
         self.scaled_tag = ""
         if self.scaled is True:
             self.scaled_tag = "_scaled"
-        scale_info_str = open("kospi_predictor_model/saved_model/scale_info.txt", "r").readlines()[0]
-        x_cols_str = open("kospi_predictor_model/saved_model/x_cols_info.txt", "r").readlines()[0]
-        y_cols_str = open("kospi_predictor_model/saved_model/y_cols_info.txt", "r").readlines()[0]
+        scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_path), "r").readlines()[0]
+        x_cols_str = open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_path), "r").readlines()[0]
+        y_cols_str = open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_path), "r").readlines()[0]
         self.scale_info = json.loads(scale_info_str)
         self.x_cols = json.loads(x_cols_str)
         self.y_cols = json.loads(y_cols_str)
         self.df_for_predict = df.copy()
-        self.model = tf.keras.models.load_model("kospi_predictor_model/saved_model/")
+        self.model = tf.keras.models.load_model("kospi_predictor_model/{}/".format(self.model_path))
 
     def _getPredDateRange(self):
         start = datetime.strptime(self.df_for_predict.iloc[-1]["date"], "%Y-%m-%d")
@@ -563,4 +573,4 @@ class Predictor():
         plt.show()
 
     def saveModelToJS(self):
-        tfjs.converters.save_keras_model(self.model, "kospi_predictor_model/saved_model_js")
+        tfjs.converters.save_keras_model(self.model, "kospi_predictor_model/{}_js".format(self.model_path))
