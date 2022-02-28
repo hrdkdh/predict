@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import tensorflowjs as tfjs
-import requests as _requests
+import requests as requests
 import matplotlib.pyplot as plt
 
 from datetime import datetime
@@ -150,7 +150,7 @@ class Crawler():
                     continue
                 
                 param["page"] = page_no
-                res = _requests.get(url, headers=header, params=param)
+                res = requests.get(url, headers=header, params=param)
                 json_parsed = res.json()
                 for item in json_parsed["data"]:
                     this_dic = {}
@@ -236,7 +236,8 @@ class Crawler():
         return df_nan_removed
 
 class DataPreprocessor():
-    def __init__(self, df_crawled, cols, scale_method="minmax"):
+    def __init__(self, df_crawled, cols, scale_method="minmax", model_save_path="saved_model"):
+        self.model_save_path = model_save_path
         self.df = df_crawled.copy()
         self.cols = cols
         self.scale_method = scale_method
@@ -298,11 +299,11 @@ class DataPreprocessor():
                 self.scale_info[col] = {"mean" : mean[col], "std" : std[col]}
                 
         scale_info_str = json.dumps(self.scale_info)
-        open("kospi_predictor_model/saved_model/scale_info.txt", "w").write(scale_info_str)
+        open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "w").write(scale_info_str)
 
     def scalingForPredict(self):
         self.scaled_tag = "_scaled"
-        scale_info_str = open("kospi_predictor_model/saved_model/scale_info.txt", "r").readlines()[0]
+        scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "r").readlines()[0]
         scale_info = json.loads(scale_info_str)
         if self.scale_method == "minmax":
             for col in self.cols:
@@ -376,8 +377,8 @@ class DataPreprocessor():
         self.df_test = df_splited[1]
 
 class ModelMaker():
-    def __init__(self, y_cols, df_train, df_test, save_path="saved_model"):
-        self.save_path = save_path
+    def __init__(self, y_cols, df_train, df_test, model_save_path="saved_model"):
+        self.model_save_path = model_save_path
         self.df_train = df_train.copy()
         self.df_test = df_test.copy()
         self.x_cols = [x for x in self.df_train.columns if x[:2] == "X_"]
@@ -441,12 +442,12 @@ class ModelMaker():
         self.model.load_weights(latest)
 
         print("모델 저장 완료")
-        model_file_path = "kospi_predictor_model/{}".format(self.save_path)
+        model_file_path = "kospi_predictor_model/{}".format(self.model_save_path)
         self.model.save(model_file_path, overwrite=True)
         x_cols_str = json.dumps(self.x_cols)
         y_cols_str = json.dumps(self.y_cols)
-        open("kospi_predictor_model/{}/x_cols_info.txt".format(self.save_path), "w").write(x_cols_str)
-        open("kospi_predictor_model/{}/y_cols_info.txt".format(self.save_path), "w").write(y_cols_str)
+        open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_save_path), "w").write(x_cols_str)
+        open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_save_path), "w").write(y_cols_str)
 
         self.df_history = pd.DataFrame({
             "loss" : self.history.history["loss"],
@@ -472,37 +473,62 @@ class ModelMaker():
             "predict error" : abs((y_test - predicted)[:, y_no]),
             "predict error(sqr)" : abs((y_test - predicted)[:, y_no]) ** 2
         })
-        self.validate_mae = self.df_predicted[:, ["predict error"]].mean()
-        self.validate_mse = self.df_predicted[:, ["predict error(sqr)"]].mean()
-        validate_str = json.dumps({
-            "validate_mae" : self.validate_mae,
-            "validate_mse" : self.validate_mse
+        self.test_mae = self.df_predicted.loc[:, ["predict error"]].mean().values[0]
+        self.test_mse = self.df_predicted.loc[:, ["predict error(sqr)"]].mean().values[0]
+        test_error_str = json.dumps({
+            "test_mae" : self.test_mae,
+            "test_mse" : self.test_mse
         })
-        open("kospi_predictor_model/{}/validate_info.txt".format(self.save_path), "w").write(validate_str)
+        open("kospi_predictor_model/{}/test_error.txt".format(self.model_save_path), "w").write(test_error_str)
         plt.figure(figsize=(16,8))
         plt.plot(self.df_predicted)
 
 class Predictor():
-    def __init__(self, df, scaled=True, scale_method="minmax", model_path = "saved_model"):
-        self.model_path = model_path
+    def __init__(self, df, scaled=True, scale_method="minmax", model_save_path = "saved_model"):
+        self.model_save_path = model_save_path
         self.scaled = scaled
         self.scale_method = scale_method
         self.scaled_tag = ""
         if self.scaled is True:
             self.scaled_tag = "_scaled"
-        scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_path), "r").readlines()[0]
-        x_cols_str = open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_path), "r").readlines()[0]
-        y_cols_str = open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_path), "r").readlines()[0]
+        scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "r").readlines()[0]
+        x_cols_str = open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_save_path), "r").readlines()[0]
+        y_cols_str = open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_save_path), "r").readlines()[0]
         self.scale_info = json.loads(scale_info_str)
         self.x_cols = json.loads(x_cols_str)
         self.y_cols = json.loads(y_cols_str)
         self.df_for_predict = df.copy()
-        self.model = tf.keras.models.load_model("kospi_predictor_model/{}/".format(self.model_path))
+        self.model = tf.keras.models.load_model("kospi_predictor_model/{}/".format(self.model_save_path))
+
+    def _getHolidays(self, year):
+        header = {
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.109 Safari/537.36"
+        }
+
+        url_code = "https://open.krx.co.kr/contents/COM/GenerateOTP.jspx"
+        param_code = {
+            "bld": "MKD/01/0110/01100305/mkd01100305_01",
+            "name": "form"
+        }
+        res_code = requests.get(url_code, headers=header, params=param_code)
+        code = res_code.text
+        url = "https://open.krx.co.kr/contents/OPN/99/OPN99000001.jspx"
+        form_data = {
+            "search_bas_yy": year,
+            "gridTp": "KRX",
+            "pagePath": "/contents/MKD/01/0110/01100305/MKD01100305.jsp",
+            "code": code,
+            "pageFirstCall": "Y"
+        }
+        res = requests.post(url, headers=header, data=form_data)
+        holiday = res.json()
+        return [x["calnd_dd"] for x in holiday["block1"]]
 
     def _getPredDateRange(self):
         start = datetime.strptime(self.df_for_predict.iloc[-1]["date"], "%Y-%m-%d")
         period = len(self.predicted[0])
         self.pred_date_range = []
+        holidays = self._getHolidays(start.year)
         
         def _temp(start, period):
             end = start + timedelta(days=period)
@@ -510,7 +536,7 @@ class Predictor():
             for date in this_date_range:
                 yoil_no = datetime.strptime(date, "%Y-%m-%d").weekday()
                 yoil = ["월", "화", "수", "목", "금", "토", "일"][yoil_no]
-                if yoil in ["토", "일"]:
+                if yoil in ["토", "일"] or date in holidays:
                     if date in self.pred_date_range:
                         self.pred_date_range.remove(date)
                 else:
@@ -573,4 +599,4 @@ class Predictor():
         plt.show()
 
     def saveModelToJS(self):
-        tfjs.converters.save_keras_model(self.model, "kospi_predictor_model/{}_js".format(self.model_path))
+        tfjs.converters.save_keras_model(self.model, "kospi_predictor_model/{}_js".format(self.model_save_path))
