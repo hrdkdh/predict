@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import warnings
 import numpy as np
 import pandas as pd
@@ -377,22 +378,25 @@ class DataPreprocessor():
         self.df_test = df_splited[1]
 
 class ModelMaker():
-    def __init__(self, y_cols, df_train, df_test, model_save_path="saved_model"):
+    def __init__(self, y_cols, df_train, df_test, activation_method="relu", model_save_path="saved_model"):
         self.model_save_path = model_save_path
         self.df_train = df_train.copy()
         self.df_test = df_test.copy()
         self.x_cols = [x for x in self.df_train.columns if x[:2] == "X_"]
         self.y_cols = y_cols
+        self.activation_method = activation_method
 
     def _constructModel(self, learning_rate):
         self.model = tf.keras.models.Sequential([
             tf.keras.layers.Flatten(input_shape=(1, len(self.x_cols))),
             # tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dense(len(self.x_cols)*10, activation='relu'),
-            tf.keras.layers.Dense(len(self.x_cols)*10, activation='relu'),
+            tf.keras.layers.Dense(len(self.x_cols)*20, activation=self.activation_method),
+            tf.keras.layers.Dense(len(self.x_cols)*20, activation=self.activation_method),
+            tf.keras.layers.Dense(len(self.x_cols)*20, activation=self.activation_method),
             # tf.keras.layers.Dropout(rate=0.1),
-            tf.keras.layers.Dense(len(self.x_cols)*10, activation='relu'),
-            tf.keras.layers.Dense(len(self.x_cols)*10, activation='relu'),
+            # tf.keras.layers.Dense(len(self.x_cols)*15, activation=self.activation_method),
+            # tf.keras.layers.Dense(len(self.x_cols)*15, activation=self.activation_method),
+            # tf.keras.layers.Dense(len(self.x_cols)*15, activation=self.activation_method),
             tf.keras.layers.Dense(len(self.y_cols))
         ])
         optimizer = tf.keras.optimizers.RMSprop(learning_rate=learning_rate)
@@ -401,6 +405,15 @@ class ModelMaker():
                     optimizer=optimizer,
                     metrics=['mae', 'mse'])
         self.model.summary()
+
+    def _makeTensorboardDir(self):
+        for folder in os.listdir("kospi_predictor_model/logs/"):
+            if "." not in folder:
+                shutil.rmtree("kospi_predictor_model/logs/"+folder)
+        now = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_dir_name = "kospi_predictor_model/logs/{}".format(now)
+        os.makedirs(log_dir_name)
+        self.log_dir_name = log_dir_name
 
     def makeModel(self, EPOCHS=200, learning_rate=0.001, history_plot_cutoff = 20):
         class CustomCallback(tf.keras.callbacks.Callback):
@@ -414,40 +427,34 @@ class ModelMaker():
         X_train = self.df_train[self.x_cols].to_numpy().reshape(-1, 1, len(self.x_cols))
         y_train = self.df_train[self.y_cols].to_numpy()
         
-        checkpoint_folder = "kospi_predictor_model/checkpoint/"
-        for file in os.listdir(checkpoint_folder):
-            os.remove(checkpoint_folder+file)
-        checkpoint_path = checkpoint_folder + "cp-{epoch:04d}.ckpt"
+        self.checkpoint_folder = "kospi_predictor_model/checkpoint/"
+        for file in os.listdir(self.checkpoint_folder):
+            os.remove(self.checkpoint_folder+file)
+        self.checkpoint_path = self.checkpoint_folder + "cp-{epoch:04d}.ckpt"
 
         cp_callback = tf.keras.callbacks.ModelCheckpoint(
-            filepath=checkpoint_path, 
+            filepath=self.checkpoint_path, 
             verbose=0, 
             monitor="val_loss",
             save_weights_only=True,
             save_best_only = True,
             save_freq="epoch"
         )
+        
+        self._makeTensorboardDir()
+        tb_callback = tf.keras.callbacks.TensorBoard(log_dir=self.log_dir_name)
 
         self._constructModel(learning_rate=learning_rate)
 
         self.history = self.model.fit(
             X_train, y_train,
             # batch_size = batch_size,
-            callbacks=[cp_callback, CustomCallback()],
+            callbacks=[cp_callback, CustomCallback(), tb_callback],
             epochs=EPOCHS, validation_split = 0.1,
             verbose = 0
         )
         print("모델 생성 완료")
-        latest = tf.train.latest_checkpoint(checkpoint_folder)
-        self.model.load_weights(latest)
-
-        print("모델 저장 완료")
-        model_file_path = "kospi_predictor_model/{}".format(self.model_save_path)
-        self.model.save(model_file_path, overwrite=True)
-        x_cols_str = json.dumps(self.x_cols)
-        y_cols_str = json.dumps(self.y_cols)
-        open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_save_path), "w").write(x_cols_str)
-        open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_save_path), "w").write(y_cols_str)
+        self.saveModelByCheckpoint()
 
         self.df_history = pd.DataFrame({
             "loss" : self.history.history["loss"],
@@ -462,6 +469,22 @@ class ModelMaker():
         plt.xlabel("EPOCHS")
         plt.legend()
         plt.show()
+
+    def saveModelByCheckpoint(self, cp_no=None):
+        if cp_no is None:
+            cp = tf.train.latest_checkpoint(self.checkpoint_folder)
+            self.model.load_weights(cp)
+        else:
+            this_checkpoint_path = self.checkpoint_folder + "/cp-{}.ckpt".format(cp_no)
+            self.model.load_weights(this_checkpoint_path)
+
+        print("모델 저장 완료")
+        model_file_path = "kospi_predictor_model/{}".format(self.model_save_path)
+        self.model.save(model_file_path, overwrite=True)
+        x_cols_str = json.dumps(self.x_cols)
+        y_cols_str = json.dumps(self.y_cols)
+        open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_save_path), "w").write(x_cols_str)
+        open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_save_path), "w").write(y_cols_str)
 
     def validateModel(self, y_no):
         X_test = self.df_test[self.x_cols].to_numpy().reshape(-1, 1, len(self.x_cols))
@@ -599,4 +622,7 @@ class Predictor():
         plt.show()
 
     def saveModelToJS(self):
-        tfjs.converters.save_keras_model(self.model, "kospi_predictor_model/{}_js".format(self.model_save_path))
+        js_folder = "kospi_predictor_model/{}_js".format(self.model_save_path)
+        for file in os.listdir(js_folder):
+            os.remove(js_folder+"/"+file)
+        tfjs.converters.save_keras_model(self.model, js_folder)
