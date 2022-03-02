@@ -1,6 +1,7 @@
 kospi_predictor_model/
 .ipynb_checkpoints/
 .DS_Store
+*.xlsx
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
