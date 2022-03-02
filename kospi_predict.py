@@ -1,6 +1,8 @@
 import os
+import time
 import json
 import shutil
+import random
 import warnings
 import numpy as np
 import pandas as pd
@@ -14,7 +16,7 @@ from datetime import timedelta
 from sklearn.model_selection import train_test_split as train_test_split
 from sklearn.preprocessing import MinMaxScaler as MinMaxScaler
 
-warnings.filterwarnings(action="ignore") #판다스 워닝 끄기
+# warnings.filterwarnings(action="ignore") #판다스 워닝 끄기
 
 __all__ = [
     "Crawler",
@@ -31,6 +33,7 @@ class Crawler():
         """
         self.df = None
         self.save_file_name = "crawled_data.xlsx"
+        self.df_kospi = None
         self.df_investor = None
         self.crawl_page_max = crawl_page_max
         self.info_for_crawl = {
@@ -43,7 +46,8 @@ class Crawler():
                 },
                 "map_for_df" : [
                     {"col" : "date", "item_key" : "date" },
-                    {"col" : "KOSPI", "item_key" : "tradePrice" }
+                    {"col" : "KOSPI", "item_key" : "tradePrice" },
+                    {"col" : "KOSPI_VOL", "item_key" : "accTradeVolume" }
                 ]
             },
             "CR" : {
@@ -122,6 +126,20 @@ class Crawler():
                     {"col" : "FOREIGN", "item_key" : "foreignStraightPurchasePrice" },
                     {"col" : "ORG", "item_key" : "institutionStraightPurchasePrice" }
                 ]
+            },
+            "GOLD" : {
+                "url" : "https://finance.daum.net/api/domestic/exchanges/COMMODITY-GOLD/days",
+                "param" : {
+                    "symbolCode": "COMMODITY-GOLD",
+                    "perPage": perPage,
+                    "fieldName": "changeRate",
+                    "order": "desc",
+                    "pagination": "true"
+                },
+                "map_for_df" : [
+                    {"col" : "date", "item_key" : "date" },
+                    {"col" : "GOLD", "item_key" : "internationalGoldPrice" }
+                ]
             }
         }
 
@@ -137,6 +155,9 @@ class Crawler():
             want_data_name_for_print = want_data_name
             if want_data_name in ["FOREIGN", "ORG"]:
                 want_data_name = "INDI"
+            elif want_data_name in ["KOSPI", "KOSPI_VOL"]:
+                want_data_name = "KOSPI"
+
             result = []
             url = self.info_for_crawl[want_data_name]["url"]
             param = self.info_for_crawl[want_data_name]["param"]
@@ -146,25 +167,50 @@ class Crawler():
                     print_prefix = "\n"
 
                 print("{}{} : {}번째 페이지 데이터 수집중...".format(print_prefix, want_data_name_for_print, page_no), end="\r")
-                
-                if self.df_investor is not None:
+
+                if want_data_name in ["FOREIGN", "ORG"] and self.df_investor is not None:
+                    continue
+                elif want_data_name in ["KOSPI", "KOSPI_VOL"] and self.df_kospi is not None:
                     continue
                 
                 param["page"] = page_no
-                res = requests.get(url, headers=header, params=param)
-                json_parsed = res.json()
+
+                req_done = False
+                retry_cnt = 0
+                while req_done is False:
+                    try:
+                        res = requests.get(url, headers=header, params=param)
+                        json_parsed = res.json()
+                    except:
+                        retry_cnt += 1
+                        print("{}{} : {}번째 페이지 데이터 수집중...(에러로 재시도{})".format(print_prefix, want_data_name_for_print, page_no, retry_cnt), end="\r")
+                        sec = random.randrange(1, 5)
+                        time.sleep(sec) #대기 후 재시도
+                    else:
+                        req_done = True
+
                 for item in json_parsed["data"]:
                     this_dic = {}
                     for map in self.info_for_crawl[want_data_name]["map_for_df"]:
                         this_value = item[map["item_key"]]
                         if map["col"] == "date":
                             this_value = this_value[:10]
+                        else:
+                            this_value = float(this_value)
                         this_dic[map["col"]] = this_value
                     result.append(this_dic)
             if want_data_name in ["INDI", "FOREIGN", "ORG"]:
                 if self.df_investor is None:
                     this_df = pd.DataFrame(result)
                     self.df_investor = this_df
+                    if self.df is None:
+                        self.df = this_df
+                    else:
+                        self.df = self.df.merge(this_df, how="left", on="date")
+            elif want_data_name in ["KOSPI", "KOSPI_VOL"]:
+                if self.df_kospi is None:
+                    this_df = pd.DataFrame(result)
+                    self.df_kospi = this_df
                     if self.df is None:
                         self.df = this_df
                     else:
@@ -328,41 +374,54 @@ class DataPreprocessor():
         maxAR += 1
         for col in self.cols:
             for before_day in range(minAR, maxAR):
-                self.df["X_{}{}_AR{}".format(col, self.scaled_tag, before_day)] = 0.0
+                result_list = []
                 for idx in range(0, len(self.df)): #각 행을 돌면서
                     before_day_idx = idx - before_day
                     if before_day_idx < 0:
-                        continue
-                    self.df.loc[idx, "X_{}{}_AR{}".format(col, self.scaled_tag, before_day)] = self.df.loc[before_day_idx, "{}{}".format(col, self.scaled_tag)]
+                        this_value = 0.0
+                    else:
+                        this_value = self.df.loc[before_day_idx, "{}{}".format(col, self.scaled_tag)]
+                    result_list.append(this_value)
+                result_df = pd.DataFrame({ "X_{}{}_AR{}".format(col, self.scaled_tag, before_day) : result_list })
+                self.df = pd.concat([self.df, result_df], axis=1)
 
     def makeMA(self, minMA=1, maxMA=11):
         maxMA += 1
         for col in self.cols:
             for mean_period in range(minMA, maxMA):
-                self.df["X_{}{}_MA{}".format(col, self.scaled_tag, mean_period)] = 0.0
+                result_list = []
                 for idx in range(0, len(self.df)): #각 행을 돌면서
                     if idx < mean_period:
-                        continue
-                    this_sum = 0
-                    this_cnt = 0
-                    for before_day in range(-mean_period, 0): #이전 일자의 행들을 돌면서
-                        before_idx = idx + before_day
-                        this_sum += self.df.loc[before_idx, "{}{}".format(col, self.scaled_tag)]
-                        this_cnt += 1
-                    self.df.loc[idx, "X_{}{}_MA{}".format(col, self.scaled_tag, mean_period)] = this_sum/this_cnt
+                        this_value = 0.0
+                    else:
+                        this_sum = 0
+                        this_cnt = 0
+                        for before_day in range(-mean_period, 0): #이전 일자의 행들을 돌면서
+                            before_idx = idx + before_day
+                            this_sum += self.df.loc[before_idx, "{}{}".format(col, self.scaled_tag)]
+                            this_cnt += 1
+                        this_value = this_sum/this_cnt
+                    result_list.append(this_value)
+                result_df = pd.DataFrame({ "X_{}{}_MA{}".format(col, self.scaled_tag, mean_period) : result_list })
+                self.df = pd.concat([self.df, result_df], axis=1)
 
     def makeTargetXs(self, len_x_ARMA):
         self.makeDiff()
-        self.makeAR(1, len_x_ARMA)
+        self.makeAR(0, len_x_ARMA)
         self.makeMA(2, len_x_ARMA)
 
     def makeTargetYs(self, next_day_len):
         for day in range(1, next_day_len+1):
-            self.df["Y_KOSPI{}_nextday_{}".format(self.scaled_tag, day)] = 0.0
+            result_list = []
             for idx in range(0, len(self.df)): #각 행을 돌면서
-                    if idx+day >= len(self.df):
-                        continue
-                    self.df.loc[idx, "Y_KOSPI{}_nextday_{}".format(self.scaled_tag, day)] = self.df.loc[idx+day, "KOSPI{}".format(self.scaled_tag)]
+                if idx+day >= len(self.df):
+                    this_value = 0.0
+                else:
+                    this_value = self.df.loc[idx+day, "KOSPI{}".format(self.scaled_tag)]
+                result_list.append(this_value)
+            result_df = pd.DataFrame({"Y_KOSPI{}_nextday_{}".format(self.scaled_tag, day) : result_list})
+            self.df = pd.concat([self.df, result_df], axis=1)
+
         self.y_list = [x for x in self.df.columns if x[:2] == "Y_"]
 
     def cutoffData(self, cutoff_len_head, cutoff_len_tail):
@@ -378,29 +437,29 @@ class DataPreprocessor():
         self.df_test = df_splited[1]
 
 class ModelMaker():
-    def __init__(self, y_cols, df_train, df_test, activation_method="relu", model_save_path="saved_model"):
-        self.model_save_path = model_save_path
+    def __init__(self, y_cols, df_train, df_test, activation_method="relu", optimizer_str="RMSprop", model_save_path="saved_model"):
+        self.y_cols = y_cols
         self.df_train = df_train.copy()
         self.df_test = df_test.copy()
-        self.x_cols = [x for x in self.df_train.columns if x[:2] == "X_"]
-        self.y_cols = y_cols
         self.activation_method = activation_method
+        self.optimizer = optimizer_str
+        self.model_save_path = model_save_path
+        self.x_cols = [x for x in self.df_train.columns if x[:2] == "X_"]
 
     def _constructModel(self, learning_rate):
         self.model = tf.keras.models.Sequential([
             tf.keras.layers.Flatten(input_shape=(1, len(self.x_cols))),
             # tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dense(len(self.x_cols)*20, activation=self.activation_method),
-            tf.keras.layers.Dense(len(self.x_cols)*20, activation=self.activation_method),
-            tf.keras.layers.Dense(len(self.x_cols)*20, activation=self.activation_method),
-            # tf.keras.layers.Dropout(rate=0.1),
-            # tf.keras.layers.Dense(len(self.x_cols)*15, activation=self.activation_method),
-            # tf.keras.layers.Dense(len(self.x_cols)*15, activation=self.activation_method),
-            # tf.keras.layers.Dense(len(self.x_cols)*15, activation=self.activation_method),
+            # tf.keras.layers.Dropout(rate=0.2),
+            tf.keras.layers.Dense(len(self.x_cols)*6, activation=self.activation_method),
+            tf.keras.layers.Dense(len(self.x_cols)*6, activation=self.activation_method),
+            tf.keras.layers.Dense(len(self.x_cols)*6, activation=self.activation_method),
             tf.keras.layers.Dense(len(self.y_cols))
         ])
-        optimizer = tf.keras.optimizers.RMSprop(learning_rate=learning_rate)
-        #optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+        if self.optimizer == "RMSprop":
+            optimizer = tf.keras.optimizers.RMSprop(learning_rate=learning_rate)
+        elif self.optimizer == "Adam":
+            optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
         self.model.compile(loss='mse',
                     optimizer=optimizer,
                     metrics=['mae', 'mse'])
