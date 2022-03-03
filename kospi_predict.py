@@ -288,8 +288,8 @@ class DataPreprocessor():
         self.df = df_crawled.copy()
         self.cols = cols
         self.scale_method = scale_method
-        self.scaled_tag = ""
         self.scale_info = {}
+        self.scale_target_cols = ["KOSPI"]
         pass
     
     def getOutlierDf(self, df):
@@ -331,65 +331,36 @@ class DataPreprocessor():
         df = (df - df.mean()) / df.std()
         return df, df_org.mean(), df_org.std()
 
-    def scalingForModeling(self):
-        self.scaled_tag = "_scaled"
-        self.scale_info["how"] = self.scale_method
-        if self.scale_method == "minmax":
-            scaler = MinMaxScaler()
-            for col in self.cols:
-                scaler.fit(self.df.loc[:, [col]])
-                self.df[col+self.scaled_tag] = scaler.transform(self.df.loc[:, [col]])
-                self.scale_info[col] = {"min" : scaler.data_min_[0], "max" : scaler.data_max_[0]}
-        elif self.scale_method == "norm":
-            for col in self.cols:
-                self.df[col+self.scaled_tag], mean, std = self.norm(self.df.loc[:, [col]])
-                self.scale_info[col] = {"mean" : mean[col], "std" : std[col]}
-                
-        scale_info_str = json.dumps(self.scale_info)
-        open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "w").write(scale_info_str)
-
-    def scalingForPredict(self):
-        self.scaled_tag = "_scaled"
-        scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "r").readlines()[0]
-        scale_info = json.loads(scale_info_str)
-        if self.scale_method == "minmax":
-            for col in self.cols:
-                min = scale_info[col]["min"]
-                max = scale_info[col]["max"]
-                self.df[col+self.scaled_tag] = (self.df.loc[:, [col]] - min) / (max - min)
-        elif self.scale_method == "norm":
-            for col in self.cols:
-                mean = scale_info[col]["mean"]
-                std = scale_info[col]["std"]
-                self.df[col+self.scaled_tag] = (self.df.loc[:, [col]] - mean) / std
-
-    def makeDiff(self):
+    def makeDiffRatio(self):
         for col in self.cols:
-            self.df["X_{}{}_DIFF".format(col, self.scaled_tag)] = 0.0
+            self.df["X_{}_DIFF_RATIO".format(col)] = 0.0
             for idx in range(0, len(self.df)): #각 행을 돌면서
                 if idx > 0:
-                    self.df.loc[idx, "X_{}{}_DIFF".format(col, self.scaled_tag)] = self.df.loc[idx, "{}{}".format(col, self.scaled_tag)] - self.df.loc[idx-1, "{}{}".format(col, self.scaled_tag)]
-    
+                    self.df.loc[idx, "X_{}_DIFF_RATIO".format(col)] = self.df.loc[idx, "{}".format(col)] / self.df.loc[idx-1, "{}".format(col)]
+
     def makeAR(self, minAR=2, maxAR=11):
         maxAR += 1
         for col in self.cols:
             for before_day in range(minAR, maxAR):
                 result_list = []
+                this_col_name = "X_{}_AR{}".format(col, before_day)
                 for idx in range(0, len(self.df)): #각 행을 돌면서
                     before_day_idx = idx - before_day
                     if before_day_idx < 0:
                         this_value = 0.0
                     else:
-                        this_value = self.df.loc[before_day_idx, "{}{}".format(col, self.scaled_tag)]
+                        this_value = self.df.loc[before_day_idx, "{}".format(col)]
                     result_list.append(this_value)
-                result_df = pd.DataFrame({ "X_{}{}_AR{}".format(col, self.scaled_tag, before_day) : result_list })
+                result_df = pd.DataFrame({ this_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)
+                self.scale_target_cols.append(this_col_name)
 
-    def makeMA(self, minMA=1, maxMA=11):
+    def makeMA(self, minMA=1, maxMA=11): #단순 이동평균이 아니라 변동비의 이동평균을 구한다
         maxMA += 1
         for col in self.cols:
             for mean_period in range(minMA, maxMA):
                 result_list = []
+                this_col_name = "X_{}_DIFF_RATIO_MA{}".format(col, mean_period)
                 for idx in range(0, len(self.df)): #각 행을 돌면서
                     if idx < mean_period:
                         this_value = 0.0
@@ -398,41 +369,90 @@ class DataPreprocessor():
                         this_cnt = 0
                         for before_day in range(-mean_period, 0): #이전 일자의 행들을 돌면서
                             before_idx = idx + before_day
-                            this_sum += self.df.loc[before_idx, "{}{}".format(col, self.scaled_tag)]
+                            this_sum += self.df.loc[before_idx, "X_{}_DIFF_RATIO".format(col)]
                             this_cnt += 1
                         this_value = this_sum/this_cnt
                     result_list.append(this_value)
-                result_df = pd.DataFrame({ "X_{}{}_MA{}".format(col, self.scaled_tag, mean_period) : result_list })
+                result_df = pd.DataFrame({ this_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)
+                self.scale_target_cols.append(this_col_name)
 
     def makeTargetXs(self, len_x_ARMA):
-        self.makeDiff()
+        self.makeDiffRatio()
         self.makeAR(0, len_x_ARMA)
         self.makeMA(2, len_x_ARMA)
 
     def makeTargetYs(self, next_day_len):
         for day in range(1, next_day_len+1):
             result_list = []
+            this_col_name = "Y_KOSPI_nextday_{}".format(day)
             for idx in range(0, len(self.df)): #각 행을 돌면서
                 if idx+day >= len(self.df):
                     this_value = 0.0
                 else:
-                    this_value = self.df.loc[idx+day, "KOSPI{}".format(self.scaled_tag)]
+                    this_value = self.df.loc[idx+day, "KOSPI"]
                 result_list.append(this_value)
-            result_df = pd.DataFrame({"Y_KOSPI{}_nextday_{}".format(self.scaled_tag, day) : result_list})
+            result_df = pd.DataFrame({ this_col_name : result_list})
             self.df = pd.concat([self.df, result_df], axis=1)
+            self.scale_target_cols.append(this_col_name)
 
         self.y_list = [x for x in self.df.columns if x[:2] == "Y_"]
+        self._getCorr()
 
     def cutoffData(self, cutoff_len_head, cutoff_len_tail):
         """
         AR과 MA로 인해 초기 0값을 가지고 있는 행들을 제거한다.
         """
-        self.df_cutoff = self.df.iloc[cutoff_len_head+1:-cutoff_len_tail]
-        self.df_cutoff.reset_index(inplace=True, drop=True)
+        if cutoff_len_tail == 0:
+            self.df = self.df.iloc[cutoff_len_head+1:]
+        else:
+            self.df = self.df.iloc[cutoff_len_head+1:-cutoff_len_tail]
+        self.df.reset_index(inplace=True, drop=True)
+
+    def scalingForModeling(self):
+        self.scale_info["how"] = self.scale_method
+        if self.scale_method == "minmax":
+            scaler = MinMaxScaler()
+            for col in self.scale_target_cols:
+                scaler.fit(self.df.loc[:, [col]])
+                self.df[col] = scaler.transform(self.df.loc[:, [col]])
+                self.scale_info[col] = {"min" : scaler.data_min_[0], "max" : scaler.data_max_[0]}
+        elif self.scale_method == "norm":
+            for col in self.scale_target_cols:
+                self.df[col], mean, std = self.norm(self.df.loc[:, [col]])
+                self.scale_info[col] = {"mean" : mean[col], "std" : std[col]}
+        self.scale_info["scale_target_cols"] = self.scale_target_cols
+        scale_info_str = json.dumps(self.scale_info)
+        open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "w").write(scale_info_str)
+
+    def scalingForPredict(self):
+        scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "r").readlines()[0]
+        scale_info = json.loads(scale_info_str)
+        if self.scale_method == "minmax":
+            for col in scale_info["scale_target_cols"]:
+                if col in self.df.columns.to_list():
+                    min = scale_info[col]["min"]
+                    max = scale_info[col]["max"]
+                    self.df[col] = (self.df.loc[:, [col]] - min) / (max - min)
+        elif self.scale_method == "norm":
+            for col in scale_info["scale_target_cols"]:
+                if col in self.df.columns.to_list():
+                    mean = scale_info[col]["mean"]
+                    std = scale_info[col]["std"]
+                    self.df[col] = (self.df.loc[:, [col]] - mean) / std
+
+    def _getCorr(self):
+        corr = []
+        for col in self.cols:
+            corr.append({
+                "X" : col,
+                "corr" : self.df[["Y_KOSPI_nextday_1", "X_{}_AR0".format(col)]].corr().iloc[0, 1]
+            })
+        df_corr = pd.DataFrame(corr)
+        self.df_corr = df_corr
 
     def splitData(self, test_size=0.2, train_size=0.8):
-        df_splited = train_test_split(self.df_cutoff, test_size=test_size, train_size=train_size, random_state=8699)
+        df_splited = train_test_split(self.df, test_size=test_size, train_size=train_size, random_state=8699)
         self.df_train = df_splited[0]
         self.df_test = df_splited[1]
 
@@ -566,13 +586,9 @@ class ModelMaker():
         plt.plot(self.df_predicted)
 
 class Predictor():
-    def __init__(self, df, scaled=True, scale_method="minmax", model_save_path = "saved_model"):
+    def __init__(self, df, scale_method="minmax", model_save_path = "saved_model"):
         self.model_save_path = model_save_path
-        self.scaled = scaled
         self.scale_method = scale_method
-        self.scaled_tag = ""
-        if self.scaled is True:
-            self.scaled_tag = "_scaled"
         scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "r").readlines()[0]
         x_cols_str = open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_save_path), "r").readlines()[0]
         y_cols_str = open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_save_path), "r").readlines()[0]
@@ -635,8 +651,8 @@ class Predictor():
         self.predicted = self.model.predict(x_for_predict)
         pred_date_range = self._getPredDateRange()
 
-        df_predicted = pd.DataFrame({"date" : pred_date_range, "KOSPI{}".format(self.scaled_tag) : self.predicted[0], "cate" : "predict"})
-        df_before = self.df_for_predict.loc[:, ["date", "KOSPI{}".format(self.scaled_tag)]]
+        df_predicted = pd.DataFrame({"date" : pred_date_range, "KOSPI" : self.predicted[0], "cate" : "predict"})
+        df_before = self.df_for_predict.loc[:, ["date", "KOSPI"]]
         df_before["cate"] = "history"
         self.df_result = pd.concat([df_before, df_predicted], ignore_index=True)
         self.df_result["md"] = ""
@@ -655,19 +671,15 @@ class Predictor():
                 self.df_result.loc[item[0], "md"] = day
             prev_month = month
 
-        if self.scaled is True:
-            #원래 금액으로 역정규화
-            if self.scale_method == "minmax":
-                min = self.scale_info["KOSPI"]["min"]
-                max = self.scale_info["KOSPI"]["max"]
-                self.df_result["KOSPI_price"] = ((max - min) * self.df_result["KOSPI{}".format(self.scaled_tag)]) + min
-            elif self.scale_method == "norm":
-                mean = self.scale_info["KOSPI"]["mean"]
-                std = self.scale_info["KOSPI"]["std"]
-                self.df_result["KOSPI_price"] = (std * self.df_result["KOSPI{}".format(self.scaled_tag)]) + mean
-
-        else:
-            self.df_result["KOSPI_price"] = self.df_result["KOSPI"]
+        #원래 금액으로 역정규화
+        if self.scale_method == "minmax":
+            min = self.scale_info["KOSPI"]["min"]
+            max = self.scale_info["KOSPI"]["max"]
+            self.df_result["KOSPI_price"] = ((max - min) * self.df_result["KOSPI"]) + min
+        elif self.scale_method == "norm":
+            mean = self.scale_info["KOSPI"]["mean"]
+            std = self.scale_info["KOSPI"]["std"]
+            self.df_result["KOSPI_price"] = (std * self.df_result["KOSPI"]) + mean
 
     def showPredictionPlot(self):
         plt.figure(figsize=(30, 12))
