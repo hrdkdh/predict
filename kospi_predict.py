@@ -457,25 +457,28 @@ class DataPreprocessor():
         self.df_test = df_splited[1]
 
 class ModelMaker():
-    def __init__(self, y_cols, df_train, df_test, activation_method="relu", optimizer_str="RMSprop", model_save_path="saved_model"):
+    def __init__(self, y_cols, df_train, df_test, perceptron_vol=None, dense_vol=5, activation_method="relu", optimizer_str="RMSprop", model_save_path="saved_model"):
         self.y_cols = y_cols
         self.df_train = df_train.copy()
         self.df_test = df_test.copy()
+        self.perceptron_vol = perceptron_vol
+        self.dense_vol = dense_vol
         self.activation_method = activation_method
         self.optimizer = optimizer_str
         self.model_save_path = model_save_path
         self.x_cols = [x for x in self.df_train.columns if x[:2] == "X_"]
 
     def _constructModel(self, learning_rate):
-        self.model = tf.keras.models.Sequential([
-            tf.keras.layers.Flatten(input_shape=(1, len(self.x_cols))),
-            # tf.keras.layers.BatchNormalization(),
-            # tf.keras.layers.Dropout(rate=0.2),
-            tf.keras.layers.Dense(len(self.x_cols)*6, activation=self.activation_method),
-            tf.keras.layers.Dense(len(self.x_cols)*6, activation=self.activation_method),
-            tf.keras.layers.Dense(len(self.x_cols)*6, activation=self.activation_method),
-            tf.keras.layers.Dense(len(self.y_cols))
-        ])
+        if self.perceptron_vol is None:
+            self.perceptron_vol = len(self.x_cols)*6
+        self.model = tf.keras.models.Sequential()
+        self.model.add(tf.keras.layers.Flatten(input_shape=(1, len(self.x_cols))))
+        # self.model.add(tf.keras.layers.BatchNormalization())
+        # self.model.add(tf.keras.layers.Dropout(rate=0.2))
+        for i in range(self.dense_vol):
+            self.model.add(tf.keras.layers.Dense(self.perceptron_vol, activation=self.activation_method))
+        self.model.add(tf.keras.layers.Dense(len(self.y_cols)))
+
         if self.optimizer == "RMSprop":
             optimizer = tf.keras.optimizers.RMSprop(learning_rate=learning_rate)
         elif self.optimizer == "Adam":
@@ -494,7 +497,7 @@ class ModelMaker():
         os.makedirs(log_dir_name)
         self.log_dir_name = log_dir_name
 
-    def makeModel(self, EPOCHS=200, learning_rate=0.001, history_plot_cutoff = 20):
+    def makeModel(self, EPOCHS=200, learning_rate=0.001, save_by_checkpoint=True):
         class CustomCallback(tf.keras.callbacks.Callback):
             def on_epoch_end(self, epoch, logs=None, EPOCHS=EPOCHS):
                 percent = round(epoch/EPOCHS*100)
@@ -533,7 +536,10 @@ class ModelMaker():
             verbose = 0
         )
         print("모델 생성 완료")
-        self.saveModelByCheckpoint()
+        if save_by_checkpoint is True:
+            self.saveModelByCheckpoint()
+        else:
+            self._saveModel()
 
         self.df_history = pd.DataFrame({
             "loss" : self.history.history["loss"],
@@ -556,34 +562,55 @@ class ModelMaker():
         else:
             this_checkpoint_path = self.checkpoint_folder + "/cp-{}.ckpt".format(cp_no)
             self.model.load_weights(this_checkpoint_path)
+        self._saveModel()
 
-        print("모델 저장 완료")
+    def _saveModel(self):
         model_file_path = "kospi_predictor_model/{}".format(self.model_save_path)
         self.model.save(model_file_path, overwrite=True)
         x_cols_str = json.dumps(self.x_cols)
         y_cols_str = json.dumps(self.y_cols)
         open("kospi_predictor_model/{}/x_cols_info.txt".format(self.model_save_path), "w").write(x_cols_str)
         open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_save_path), "w").write(y_cols_str)
+        print("모델 저장 완료")
 
-    def validateModel(self, y_no):
+
+    def validateModel(self):
         X_test = self.df_test[self.x_cols].to_numpy().reshape(-1, 1, len(self.x_cols))
         y_test = self.df_test[self.y_cols].to_numpy()
         predicted = self.model.predict(X_test)
-        self.df_predicted = pd.DataFrame({
-            "org" : y_test[:, y_no],
-            "predicted" : predicted[:, y_no],
-            "predict error" : abs((y_test - predicted)[:, y_no]),
-            "predict error(sqr)" : abs((y_test - predicted)[:, y_no]) ** 2
-        })
-        self.test_mae = self.df_predicted.loc[:, ["predict error"]].mean().values[0]
-        self.test_mse = self.df_predicted.loc[:, ["predict error(sqr)"]].mean().values[0]
-        test_error_str = json.dumps({
-            "test_mae" : self.test_mae,
-            "test_mse" : self.test_mse
-        })
+
+        self.df_predicted = None
+        test_error = []
+        for i in range(len(self.y_cols)):
+            this_df = pd.DataFrame({
+                "org_{}".format(i) : y_test[:, i],
+                "predicted_{}".format(i) : predicted[:, i],
+                "predict error_{}".format(i) : abs((y_test - predicted)[:, i]),
+                "predict error(sqr)_{}".format(i) : abs((y_test - predicted)[:, i]) ** 2
+            })
+            this_test_mae = this_df.loc[:, ["predict error_{}".format(i)]].mean().values[0]
+            this_test_mse = this_df.loc[:, ["predict error(sqr)_{}".format(i)]].mean().values[0]
+            test_error.append({
+                "y_no" : i,
+                "test_mae" : this_test_mae,
+                "test_mse" : this_test_mse
+            })
+            if self.df_predicted is None:
+                self.df_predicted = this_df
+            else:
+                self.df_predicted = pd.concat([self.df_predicted, this_df], axis=1)
+        self.test_error = pd.DataFrame(test_error)
+        test_error_str = json.dumps(test_error)
         open("kospi_predictor_model/{}/test_error.txt".format(self.model_save_path), "w").write(test_error_str)
-        plt.figure(figsize=(16,8))
-        plt.plot(self.df_predicted)
+        # plt.figure(1, figsize=(16,8))
+        # plt.plot(self.df_predicted)
+
+        plt.figure(figsize=(20, 16))
+        for i in range(len(self.y_cols)):
+            plt.subplot(4, int(len(self.y_cols)/4), i+1)
+            plt.scatter(x=self.df_predicted["org_{}".format(i)], y=self.df_predicted["predicted_{}".format(i)])
+
+        
 
 class Predictor():
     def __init__(self, df, scale_method="minmax", model_save_path = "saved_model"):
@@ -622,8 +649,8 @@ class Predictor():
         holiday = res.json()
         return [x["calnd_dd"] for x in holiday["block1"]]
 
-    def _getPredDateRange(self):
-        start = datetime.strptime(self.df_for_predict.iloc[-1]["date"], "%Y-%m-%d")
+    def _getPredDateRange(self, history_before=1):
+        start = datetime.strptime(self.df_for_predict.iloc[-history_before]["date"], "%Y-%m-%d")
         period = len(self.predicted[0])
         self.pred_date_range = []
         holidays = self._getHolidays(start.year)
@@ -646,10 +673,10 @@ class Predictor():
         _temp(start, period)
         return self.pred_date_range
 
-    def predict(self):
-        x_for_predict = self.df_for_predict.loc[len(self.df_for_predict)-1, self.x_cols].to_numpy().reshape(-1, 1, len(self.x_cols)).astype(np.float64)
+    def predict(self, history_before = 1):
+        x_for_predict = self.df_for_predict.loc[len(self.df_for_predict)-history_before, self.x_cols].to_numpy().reshape(-1, 1, len(self.x_cols)).astype(np.float64)
         self.predicted = self.model.predict(x_for_predict)
-        pred_date_range = self._getPredDateRange()
+        pred_date_range = self._getPredDateRange(history_before)
 
         df_predicted = pd.DataFrame({"date" : pred_date_range, "KOSPI" : self.predicted[0], "cate" : "predict"})
         df_before = self.df_for_predict.loc[:, ["date", "KOSPI"]]
@@ -681,6 +708,8 @@ class Predictor():
             std = self.scale_info["KOSPI"]["std"]
             self.df_result["KOSPI_price"] = (std * self.df_result["KOSPI"]) + mean
 
+        return self.df_result
+
     def showPredictionPlot(self):
         plt.figure(figsize=(30, 12))
         plt.title("KOSPI PREDICTION", fontsize="60")
@@ -689,6 +718,28 @@ class Predictor():
         for item in self.df_result.loc[(self.df_result["cate"] == "predict")].iterrows():
             plt.text(item[0], item[1]["KOSPI_price"], "{:.0f}".format(item[1]["KOSPI_price"]))
         plt.xticks(self.df_result.index, self.df_result["md"])
+        plt.legend(fontsize="30")
+        plt.show()
+
+    def showPredictionByHistory(self, df_result, history_before = -20):
+        history = df_result.loc[(df_result["cate"] == "history"), ["date", "md", "KOSPI_price"]]
+        predict = df_result.loc[(df_result["cate"] == "predict"), ["date", "md", "KOSPI_price"]]
+        history.rename(columns={"KOSPI_price" : "KOSPI_history"}, inplace=True)
+        predict.rename(columns={"KOSPI_price" : "KOSPI_predict"}, inplace=True)
+        history.reset_index(drop=True, inplace=True)
+        predict.reset_index(drop=True, inplace=True)
+
+        start_index_no = history[(history["date"] == predict.loc[0, "date"])].index[0]
+        history = history.loc[start_index_no:]
+        history.reset_index(drop=True, inplace=True)
+
+        df_validate = predict.merge(history, left_index=True, right_index=True, how="left")
+
+        plt.figure(figsize=(30, 12))
+        plt.title("PREDICTION Validate", fontsize="60")
+        plt.plot(df_validate.loc[:, "KOSPI_history"], label = "history")
+        plt.plot(df_validate.loc[:, "KOSPI_predict"], label = "predict")
+        plt.xticks(df_validate.index, df_validate["md_x"])
         plt.legend(fontsize="30")
         plt.show()
 
