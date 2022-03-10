@@ -37,19 +37,6 @@ class Crawler():
         self.df_investor = None
         self.crawl_page_max = crawl_page_max
         self.info_for_crawl = {
-            "KOSPI" : {
-                "url" : "https://finance.daum.net/api/market_index/days",
-                "param" : {
-                    "market": "KOSPI",
-                    "pagination": "true",
-                    "perPage" : perPage
-                },
-                "map_for_df" : [
-                    {"col" : "date", "item_key" : "date" },
-                    {"col" : "KOSPI", "item_key" : "tradePrice" },
-                    {"col" : "KOSPI_VOL", "item_key" : "accTradeVolume" }
-                ]
-            },
             "CR" : {
                 "url" : "https://finance.daum.net/api/exchanges/FRX.KRWUSD/days",
                 "param" : {
@@ -140,8 +127,59 @@ class Crawler():
                     {"col" : "date", "item_key" : "date" },
                     {"col" : "GOLD", "item_key" : "internationalGoldPrice" }
                 ]
+            },
+            "WTI" : {
+                "url" : "https://finance.daum.net/api/domestic/exchanges/COMMODITY-/CLc1/days",
+                "param" : {
+                    "symbolCode": "COMMODITY-/CLc1",
+                    "perPage": perPage,
+                    "fieldName": "changeRate",
+                    "order": "desc",
+                    "pagination": "true"
+                },
+                "map_for_df" : [
+                    {"col" : "date", "item_key" : "date" },
+                    {"col" : "WTI", "item_key" : "tradePrice" }
+                ]
             }
         }
+
+    def crawlDataKOSPI(self):
+        now_ymd = datetime.now().strftime("%Y%m%d")
+        header = {
+            "referer": "http://data.krx.co.kr",
+            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4758.102 Safari/537.36"
+        }
+        url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
+        form_data = {
+            "bld": "dbms/MDC/STAT/standard/MDCSTAT00301",
+            "locale": "ko_KR",
+            "tboxindIdx_finder_equidx0_1": "코스피",
+            "indIdx": "1",
+            "indIdx2": "001",
+            "codeNmindIdx_finder_equidx0_1": "코스피",
+            "param1indIdx_finder_equidx0_1": "",
+            "strtDd": "20010102",
+            "endDd": now_ymd,
+            "share": "2",
+            "money": "3",
+            "csvxls_isNo": "false",
+        }
+        res = requests.post(url, data=form_data, headers=header)
+        json_parsed = res.json()
+        result = []
+        for item in json_parsed["output"]:
+            this_dic = {
+                "date" : item["TRD_DD"].replace("/" ,"-"),
+                "KOSPI" : float(item["CLSPRC_IDX"].replace(",", "")),
+                "KOSPI_HIGH" : float(item["HGPRC_IDX"].replace(",", "")),
+                "KOSPI_LOW" : float(item["LWPRC_IDX"].replace(",", "")),
+                "KOSPI_VOL" : float(item["ACC_TRDVOL"].replace(",", "")),
+                "KOSPI_HIGH_LOW_GAP" : float(item["LWPRC_IDX"].replace(",", "")) - float(item["HGPRC_IDX"].replace(",", ""))
+            }
+            result.append(this_dic)
+        this_df = pd.DataFrame(result)
+        return this_df
 
     def crawlData(self, want_data_names, save=False):
         header = {
@@ -155,8 +193,15 @@ class Crawler():
             want_data_name_for_print = want_data_name
             if want_data_name in ["FOREIGN", "ORG"]:
                 want_data_name = "INDI"
-            elif want_data_name in ["KOSPI", "KOSPI_VOL"]:
-                want_data_name = "KOSPI"
+            elif want_data_name in ["KOSPI", "KOSPI_VOL", "KOSPI_HIGH", "KOSPI_LOW", "KOSPI_HIGH_LOW_GAP"]:
+                print("\n{} : 데이터 수집중...".format(want_data_name_for_print), end="\r")
+                if self.df is None or want_data_name not in self.df.columns.to_list():
+                    this_df = self.crawlDataKOSPI()
+                    if self.df is None:
+                        self.df = this_df
+                    else:
+                        self.df = self.df.merge(this_df, how="left", on="date")
+                continue
 
             result = []
             url = self.info_for_crawl[want_data_name]["url"]
@@ -168,9 +213,7 @@ class Crawler():
 
                 print("{}{} : {}번째 페이지 데이터 수집중...".format(print_prefix, want_data_name_for_print, page_no), end="\r")
 
-                if want_data_name in ["FOREIGN", "ORG"] and self.df_investor is not None:
-                    continue
-                elif want_data_name in ["KOSPI", "KOSPI_VOL"] and self.df_kospi is not None:
+                if want_data_name in ["INDI", "FOREIGN", "ORG"] and want_data_name not in self.df.columns.to_list():
                     continue
                 
                 param["page"] = page_no
@@ -199,28 +242,26 @@ class Crawler():
                             this_value = float(this_value)
                         this_dic[map["col"]] = this_value
                     result.append(this_dic)
-            if want_data_name in ["INDI", "FOREIGN", "ORG"]:
-                if self.df_investor is None:
-                    this_df = pd.DataFrame(result)
-                    self.df_investor = this_df
-                    if self.df is None:
-                        self.df = this_df
-                    else:
-                        self.df = self.df.merge(this_df, how="left", on="date")
-            elif want_data_name in ["KOSPI", "KOSPI_VOL"]:
-                if self.df_kospi is None:
-                    this_df = pd.DataFrame(result)
-                    self.df_kospi = this_df
-                    if self.df is None:
-                        self.df = this_df
-                    else:
-                        self.df = self.df.merge(this_df, how="left", on="date")
+            if want_data_name in ["INDI", "FOREIGN", "ORG"] and want_data_name not in self.df.columns.to_list():
+                this_df = pd.DataFrame(result)
+                if self.df is None:
+                    self.df = this_df
+                else:
+                    self.df = self.df.merge(this_df, how="left", on="date")
             else:
                 this_df = pd.DataFrame(result)
                 if self.df is None:
                     self.df = this_df
                 else:
                     self.df = self.df.merge(this_df, how="left", on="date")
+
+        remove_col = []
+        for col in self.df.columns.to_list():
+            if col not in want_data_names:
+                remove_col.append(col)
+        remove_col.remove("date")
+        self.df.drop(columns=remove_col, inplace=True)
+
         if save is True:
             self.df.to_excel(self.save_file_name)
         return self.df
@@ -289,8 +330,6 @@ class DataPreprocessor():
         self.cols = cols
         self.scale_method = scale_method
         self.scale_info = {}
-        self.scale_target_cols = ["KOSPI"]
-        pass
     
     def getOutlierDf(self, df):
         df_outlier = df.copy()
@@ -343,17 +382,23 @@ class DataPreprocessor():
         for col in self.cols:
             for before_day in range(minAR, maxAR):
                 result_list = []
+                result_diff_list = []
                 this_col_name = "X_{}_AR{}".format(col, before_day)
+                this_diff_col_name = "X_{}_DIFF_RATIO_AR{}".format(col, before_day)
                 for idx in range(0, len(self.df)): #각 행을 돌면서
                     before_day_idx = idx - before_day
                     if before_day_idx < 0:
-                        this_value = 0.0
+                        this_value = np.nan
+                        this_diff_value = np.nan
                     else:
                         this_value = self.df.loc[before_day_idx, "{}".format(col)]
+                        this_diff_value = self.df.loc[before_day_idx, "X_{}_DIFF_RATIO".format(col)]
                     result_list.append(this_value)
+                    result_diff_list.append(this_diff_value)
                 result_df = pd.DataFrame({ this_col_name : result_list })
+                result_diff_df = pd.DataFrame({ this_diff_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)
-                self.scale_target_cols.append(this_col_name)
+                self.df = pd.concat([self.df, result_diff_df], axis=1)
 
     def makeMA(self, minMA=1, maxMA=11): #단순 이동평균이 아니라 변동비의 이동평균을 구한다
         maxMA += 1
@@ -375,12 +420,6 @@ class DataPreprocessor():
                     result_list.append(this_value)
                 result_df = pd.DataFrame({ this_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)
-                self.scale_target_cols.append(this_col_name)
-
-    def makeTargetXs(self, len_x_ARMA):
-        self.makeDiffRatio()
-        self.makeAR(0, len_x_ARMA)
-        self.makeMA(2, len_x_ARMA)
 
     def makeTargetYs(self, next_day_len):
         for day in range(1, next_day_len+1):
@@ -394,7 +433,6 @@ class DataPreprocessor():
                 result_list.append(this_value)
             result_df = pd.DataFrame({ this_col_name : result_list})
             self.df = pd.concat([self.df, result_df], axis=1)
-            self.scale_target_cols.append(this_col_name)
 
         self.y_list = [x for x in self.df.columns if x[:2] == "Y_"]
         self._getCorr()
@@ -413,15 +451,14 @@ class DataPreprocessor():
         self.scale_info["how"] = self.scale_method
         if self.scale_method == "minmax":
             scaler = MinMaxScaler()
-            for col in self.scale_target_cols:
+            for col in self.cols:
                 scaler.fit(self.df.loc[:, [col]])
                 self.df[col] = scaler.transform(self.df.loc[:, [col]])
                 self.scale_info[col] = {"min" : scaler.data_min_[0], "max" : scaler.data_max_[0]}
         elif self.scale_method == "norm":
-            for col in self.scale_target_cols:
+            for col in self.cols:
                 self.df[col], mean, std = self.norm(self.df.loc[:, [col]])
                 self.scale_info[col] = {"mean" : mean[col], "std" : std[col]}
-        self.scale_info["scale_target_cols"] = self.scale_target_cols
         scale_info_str = json.dumps(self.scale_info)
         open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "w").write(scale_info_str)
 
@@ -429,24 +466,22 @@ class DataPreprocessor():
         scale_info_str = open("kospi_predictor_model/{}/scale_info.txt".format(self.model_save_path), "r").readlines()[0]
         scale_info = json.loads(scale_info_str)
         if self.scale_method == "minmax":
-            for col in scale_info["scale_target_cols"]:
-                if col in self.df.columns.to_list():
-                    min = scale_info[col]["min"]
-                    max = scale_info[col]["max"]
-                    self.df[col] = (self.df.loc[:, [col]] - min) / (max - min)
+            for col in self.cols:
+                min = scale_info[col]["min"]
+                max = scale_info[col]["max"]
+                self.df[col] = (self.df.loc[:, [col]] - min) / (max - min)
         elif self.scale_method == "norm":
-            for col in scale_info["scale_target_cols"]:
-                if col in self.df.columns.to_list():
-                    mean = scale_info[col]["mean"]
-                    std = scale_info[col]["std"]
-                    self.df[col] = (self.df.loc[:, [col]] - mean) / std
+            for col in self.cols:
+                mean = scale_info[col]["mean"]
+                std = scale_info[col]["std"]
+                self.df[col] = (self.df.loc[:, [col]] - mean) / std
 
     def _getCorr(self):
         corr = []
-        for col in self.cols:
+        for col in [x for x in self.df.columns.to_list() if "X_" in x]:
             corr.append({
                 "X" : col,
-                "corr" : self.df[["Y_KOSPI_nextday_1", "X_{}_AR0".format(col)]].corr().iloc[0, 1]
+                "corr" : self.df[["Y_KOSPI_nextday_1", col]].corr().iloc[0, 1]
             })
         df_corr = pd.DataFrame(corr)
         self.df_corr = df_corr
@@ -500,9 +535,9 @@ class ModelMaker():
     def makeModel(self, EPOCHS=200, learning_rate=0.001, save_by_checkpoint=True):
         class CustomCallback(tf.keras.callbacks.Callback):
             def on_epoch_end(self, epoch, logs=None, EPOCHS=EPOCHS):
-                percent = round(epoch/EPOCHS*100)
+                percent = round(epoch+1/EPOCHS*100)
                 print("EPOCH : {}/{}({}%) loss : {:.4f}, mae : {:.4f}, mse : {:.4f} / val_loss : {:.4f}, val_mae : {:.4f}, val_mse : {:.4f}{}"
-                .format(epoch, EPOCHS, percent, 
+                .format(epoch+1, EPOCHS, percent, 
                         logs["loss"], logs["mae"], logs["mse"], logs["val_loss"], logs["val_mae"], logs["val_mse"], " "*30),
                         end="\r")
 
@@ -573,7 +608,6 @@ class ModelMaker():
         open("kospi_predictor_model/{}/y_cols_info.txt".format(self.model_save_path), "w").write(y_cols_str)
         print("모델 저장 완료")
 
-
     def validateModel(self):
         X_test = self.df_test[self.x_cols].to_numpy().reshape(-1, 1, len(self.x_cols))
         y_test = self.df_test[self.y_cols].to_numpy()
@@ -609,8 +643,6 @@ class ModelMaker():
         for i in range(len(self.y_cols)):
             plt.subplot(4, int(len(self.y_cols)/4), i+1)
             plt.scatter(x=self.df_predicted["org_{}".format(i)], y=self.df_predicted["predicted_{}".format(i)])
-
-        
 
 class Predictor():
     def __init__(self, df, scale_method="minmax", model_save_path = "saved_model"):
@@ -707,6 +739,8 @@ class Predictor():
             mean = self.scale_info["KOSPI"]["mean"]
             std = self.scale_info["KOSPI"]["std"]
             self.df_result["KOSPI_price"] = (std * self.df_result["KOSPI"]) + mean
+        else:
+            self.df_result["KOSPI_price"] = self.df_result["KOSPI"]
 
         return self.df_result
 

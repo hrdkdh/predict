@@ -132,3 +132,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+.DS_Store
+kospi_predictor_model/.DS_Store
+crawled_data.xlsx
