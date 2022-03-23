@@ -2,6 +2,7 @@ kospi_predictor_model/
 .ipynb_checkpoints/
 .DS_Store
 *.xlsx
+*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -135,3 +136,4 @@ dmypy.json
 .DS_Store
 kospi_predictor_model/.DS_Store
 crawled_data.xlsx
+data_cnn/2016-05-24.png
