@@ -1,4 +1,5 @@
 import os
+from statistics import mean
 import time
 import json
 import shutil
@@ -13,6 +14,7 @@ import matplotlib.pyplot as plt
 
 from datetime import datetime
 from datetime import timedelta
+from statsmodels.formula.api import ols
 from sklearn.model_selection import train_test_split as train_test_split
 from sklearn.preprocessing import MinMaxScaler as MinMaxScaler
 
@@ -172,9 +174,11 @@ class Crawler():
             this_dic = {
                 "date" : item["TRD_DD"].replace("/" ,"-"),
                 "KOSPI" : float(item["CLSPRC_IDX"].replace(",", "")),
+                "KOSPI_START" : float(item["OPNPRC_IDX"].replace(",", "")),
                 "KOSPI_HIGH" : float(item["HGPRC_IDX"].replace(",", "")),
                 "KOSPI_LOW" : float(item["LWPRC_IDX"].replace(",", "")),
-                "KOSPI_VOL" : float(item["ACC_TRDVOL"].replace(",", "")),
+                "KOSPI_TRADE_VOL" : float(item["ACC_TRDVOL"].replace(",", "")),
+                "KOSPI_TRADE_VAL" : float(item["ACC_TRDVAL"].replace(",", "")),
                 "KOSPI_HIGH_LOW_GAP" : float(item["LWPRC_IDX"].replace(",", "")) - float(item["HGPRC_IDX"].replace(",", ""))
             }
             result.append(this_dic)
@@ -193,7 +197,7 @@ class Crawler():
             want_data_name_for_print = want_data_name
             if want_data_name in ["FOREIGN", "ORG"]:
                 want_data_name = "INDI"
-            elif want_data_name in ["KOSPI", "KOSPI_VOL", "KOSPI_HIGH", "KOSPI_LOW", "KOSPI_HIGH_LOW_GAP"]:
+            elif want_data_name in ["KOSPI", "KOSPI_START", "KOSPI_TRADE_VOL", "KOSPI_TRADE_VAL", "KOSPI_HIGH", "KOSPI_LOW", "KOSPI_HIGH_LOW_GAP"]:
                 print("\n{} : 데이터 수집중...".format(want_data_name_for_print), end="\r")
                 if self.df is None or want_data_name not in self.df.columns.to_list():
                     this_df = self.crawlDataKOSPI()
@@ -250,6 +254,14 @@ class Crawler():
                     self.df = self.df.merge(this_df, how="left", on="date")
             else:
                 this_df = pd.DataFrame(result)
+                if want_data_name in ["NASDAQ", "DOW"]: #미국 지수는 하루 전으로 일자를 잡아야 합리적임. 새벽에 결과가 나오는데다 당일의 경우 실시간 값을 출력하기 때문에 정확하지 않으므로...
+                    new_data = []
+                    for i in range(0, len(this_df)):
+                        if i+1 == len(this_df):
+                            new_data.append(np.nan)
+                        else:
+                            new_data.append(this_df.loc[i+1, want_data_name])
+                    this_df[want_data_name] = new_data
                 if self.df is None:
                     self.df = this_df
                 else:
@@ -379,7 +391,8 @@ class DataPreprocessor():
 
     def makeAR(self, minAR=2, maxAR=11):
         maxAR += 1
-        for col in self.cols:
+        for idx, col in enumerate(self.cols):
+            print("자기상관 생성중... ({:.2f}%)".format(100*(idx+1)/len(self.cols)), end="\r")
             for before_day in range(minAR, maxAR):
                 result_list = []
                 result_diff_list = []
@@ -399,30 +412,54 @@ class DataPreprocessor():
                 result_diff_df = pd.DataFrame({ this_diff_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)
                 self.df = pd.concat([self.df, result_diff_df], axis=1)
+        print("\n")
 
-    def makeMA(self, minMA=1, maxMA=11): #단순 이동평균이 아니라 변동비의 이동평균을 구한다
-        maxMA += 1
-        for col in self.cols:
-            for mean_period in range(minMA, maxMA):
+    def makeMA(self, minMA=1, maxMA=11): #단순 이동평균 뿐만 아니라 변동비의 이동평균까지 구한다
+        maxMA += 2
+        pb_max_cnt = len(self.cols) * (maxMA - minMA)
+        for idx, col in enumerate(self.cols):
+            for idx2, mean_period in enumerate(range(minMA, maxMA)):
+                pb_now_cnt = (idx * len(self.cols)) + idx2
+                print("이동평균 생성중... ({:.2f}%)".format((100*pb_now_cnt)/pb_max_cnt), end="\r")
+
                 result_list = []
-                this_col_name = "X_{}_DIFF_RATIO_MA{}".format(col, mean_period)
-                for idx in range(0, len(self.df)): #각 행을 돌면서
-                    if idx < mean_period:
+                this_col_name = "X_{}_MA{}".format(col, mean_period)
+                for idx3 in range(0, len(self.df)): #각 행을 돌면서
+                    if idx3 < mean_period:
                         this_value = 0.0
                     else:
                         this_sum = 0
                         this_cnt = 0
                         for before_day in range(-mean_period, 0): #이전 일자의 행들을 돌면서
-                            before_idx = idx + before_day
+                            before_idx = idx3 + before_day
+                            this_sum += self.df.loc[before_idx, "{}".format(col)]
+                            this_cnt += 1
+                        this_value = this_sum/this_cnt
+                    result_list.append(this_value)
+                result_df = pd.DataFrame({ this_col_name : result_list })
+                self.df = pd.concat([self.df, result_df], axis=1)                
+                
+                result_list = []
+                this_col_name = "X_{}_DIFF_RATIO_MA{}".format(col, mean_period)
+                for idx3 in range(0, len(self.df)): #각 행을 돌면서
+                    if idx3 < mean_period:
+                        this_value = 0.0
+                    else:
+                        this_sum = 0
+                        this_cnt = 0
+                        for before_day in range(-mean_period, 0): #이전 일자의 행들을 돌면서
+                            before_idx = idx3 + before_day
                             this_sum += self.df.loc[before_idx, "X_{}_DIFF_RATIO".format(col)]
                             this_cnt += 1
                         this_value = this_sum/this_cnt
                     result_list.append(this_value)
                 result_df = pd.DataFrame({ this_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)
+        print("\n")
 
     def makeTargetYs(self, next_day_len):
-        for day in range(1, next_day_len+1):
+        for idx, day in enumerate(range(1, next_day_len+1)):
+            print("라벨 생성중... ({:.2f}%)".format(100*(idx+1)/next_day_len), end="\r")
             result_list = []
             this_col_name = "Y_KOSPI_nextday_{}".format(day)
             for idx in range(0, len(self.df)): #각 행을 돌면서
@@ -435,7 +472,6 @@ class DataPreprocessor():
             self.df = pd.concat([self.df, result_df], axis=1)
 
         self.y_list = [x for x in self.df.columns if x[:2] == "Y_"]
-        self._getCorr()
 
     def cutoffData(self, cutoff_len_head, cutoff_len_tail):
         """
@@ -476,15 +512,31 @@ class DataPreprocessor():
                 std = scale_info[col]["std"]
                 self.df[col] = (self.df.loc[:, [col]] - mean) / std
 
-    def _getCorr(self):
+    def getRemoveColByCorr(self, threshold= 0.7):
         corr = []
         for col in [x for x in self.df.columns.to_list() if "X_" in x]:
             corr.append({
                 "X" : col,
                 "corr" : self.df[["Y_KOSPI_nextday_1", col]].corr().iloc[0, 1]
             })
-        df_corr = pd.DataFrame(corr)
-        self.df_corr = df_corr
+        self.df_corr = pd.DataFrame(corr)
+        self.df_corr.sort_values(by=["corr"], ascending=False, inplace=True)
+        self.df_corr.reset_index(inplace=True, drop=True)
+        self.remove_cols = self.df_corr.loc[(abs(self.df_corr["corr"]) < threshold), "X"].to_list()
+
+    def getRemoveColByRegression(self, threshold=0.7):
+        reg = []
+        y = [x for x in self.df.columns.to_list() if "Y_" in x][0]
+        for col in [x for x in self.df.columns.to_list() if "X_" in x]:
+            res = ols("{} ~ {}".format(y, col), data=self.df).fit()
+            reg.append({
+                "X" : col,
+                "rsquared" : res.rsquared
+            })
+        self.df_reg = pd.DataFrame(reg)
+        self.df_reg.sort_values(by=["rsquared"], ascending=False, inplace=True)
+        self.df_reg.reset_index(inplace=True, drop=True)
+        self.remove_cols = self.df_reg.loc[(abs(self.df_reg["rsquared"]) < threshold), "X"].to_list()
 
     def splitData(self, test_size=0.2, train_size=0.8):
         df_splited = train_test_split(self.df, test_size=test_size, train_size=train_size, random_state=8699)
@@ -492,12 +544,13 @@ class DataPreprocessor():
         self.df_test = df_splited[1]
 
 class ModelMaker():
-    def __init__(self, y_cols, df_train, df_test, perceptron_vol=None, dense_vol=5, activation_method="relu", optimizer_str="RMSprop", model_save_path="saved_model"):
+    def __init__(self, y_cols, df_train, df_test, perceptron_vol=None, dense_vol1=5, dense_vol2=5, activation_method="relu", optimizer_str="RMSprop", model_save_path="saved_model"):
         self.y_cols = y_cols
         self.df_train = df_train.copy()
         self.df_test = df_test.copy()
         self.perceptron_vol = perceptron_vol
-        self.dense_vol = dense_vol
+        self.dense_vol1 = dense_vol1
+        self.dense_vol2 = dense_vol2
         self.activation_method = activation_method
         self.optimizer = optimizer_str
         self.model_save_path = model_save_path
@@ -510,7 +563,10 @@ class ModelMaker():
         self.model.add(tf.keras.layers.Flatten(input_shape=(1, len(self.x_cols))))
         # self.model.add(tf.keras.layers.BatchNormalization())
         # self.model.add(tf.keras.layers.Dropout(rate=0.2))
-        for i in range(self.dense_vol):
+        for i in range(self.dense_vol1):
+            self.model.add(tf.keras.layers.Dense(self.perceptron_vol, activation=self.activation_method))
+        self.model.add(tf.keras.layers.Dense(len(self.y_cols)))
+        for i in range(self.dense_vol2):
             self.model.add(tf.keras.layers.Dense(self.perceptron_vol, activation=self.activation_method))
         self.model.add(tf.keras.layers.Dense(len(self.y_cols)))
 
@@ -532,10 +588,10 @@ class ModelMaker():
         os.makedirs(log_dir_name)
         self.log_dir_name = log_dir_name
 
-    def makeModel(self, EPOCHS=200, learning_rate=0.001, save_by_checkpoint=True):
+    def makeModel(self, EPOCHS=200, batch_size=64, learning_rate=0.001, save_by_checkpoint=True):
         class CustomCallback(tf.keras.callbacks.Callback):
             def on_epoch_end(self, epoch, logs=None, EPOCHS=EPOCHS):
-                percent = round(epoch+1/EPOCHS*100)
+                percent = round(((epoch+1)/EPOCHS)*100)
                 print("EPOCH : {}/{}({}%) loss : {:.4f}, mae : {:.4f}, mse : {:.4f} / val_loss : {:.4f}, val_mae : {:.4f}, val_mse : {:.4f}{}"
                 .format(epoch+1, EPOCHS, percent, 
                         logs["loss"], logs["mae"], logs["mse"], logs["val_loss"], logs["val_mae"], logs["val_mse"], " "*30),
@@ -565,7 +621,7 @@ class ModelMaker():
 
         self.history = self.model.fit(
             X_train, y_train,
-            # batch_size = batch_size,
+            batch_size = batch_size,
             callbacks=[cp_callback, CustomCallback(), tb_callback],
             epochs=EPOCHS, validation_split = 0.1,
             verbose = 0
@@ -590,14 +646,13 @@ class ModelMaker():
         plt.legend()
         plt.show()
 
-    def saveModelByCheckpoint(self, cp_no=None):
-        if cp_no is None:
-            cp = tf.train.latest_checkpoint(self.checkpoint_folder)
-            self.model.load_weights(cp)
-        else:
-            this_checkpoint_path = self.checkpoint_folder + "/cp-{}.ckpt".format(cp_no)
-            self.model.load_weights(this_checkpoint_path)
+    def saveModelByCheckpoint(self, cp_index=-1):
+        self.ckpts = [x for x in os.listdir(self.checkpoint_folder) if x.split(".")[-1] == "index"]
+        self.ckpts.sort()
+        this_checkpoint_path = self.checkpoint_folder + "/" + self.ckpts[cp_index].split(".")[0] + ".ckpt"
+        self.model.load_weights(this_checkpoint_path)
         self._saveModel()
+        print("check point : {}".format(self.ckpts[cp_index].split(".")[0]))
 
     def _saveModel(self):
         model_file_path = "kospi_predictor_model/{}".format(self.model_save_path)
