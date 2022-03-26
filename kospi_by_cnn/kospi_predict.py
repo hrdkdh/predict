@@ -384,42 +384,61 @@ class DataPreprocessor():
 
     def makeDiffRatio(self):
         for col in self.cols:
-            self.df["X_{}_DIFF_RATIO".format(col)] = 0.0
+            self.df["X_{}_DIFF".format(col)] = 0.0
             for idx in range(0, len(self.df)): #각 행을 돌면서
                 if idx > 0:
-                    self.df.loc[idx, "X_{}_DIFF_RATIO".format(col)] = self.df.loc[idx, "{}".format(col)] / self.df.loc[idx-1, "{}".format(col)]
+                    self.df.loc[idx, "X_{}_DIFF".format(col)] = self.df.loc[idx, "{}".format(col)] / self.df.loc[idx-1, "{}".format(col)]
 
-    def makeAR(self, minAR=2, maxAR=11):
+    def makeDiffByRange(self, minAR=2, maxAR=11):
         maxAR += 1
         for idx, col in enumerate(self.cols):
-            print("자기상관 생성중... ({:.2f}%)".format(100*(idx+1)/len(self.cols)), end="\r")
+            print("차분 생성중... ({:.2f}%)".format(100*(idx+1)/len(self.cols)), end="\r")
             for before_day in range(minAR, maxAR):
                 result_list = []
-                result_diff_list = []
-                this_col_name = "X_{}_AR{}".format(col, before_day)
-                this_diff_col_name = "X_{}_DIFF_RATIO_AR{}".format(col, before_day)
+                this_col_name = "X_{}_DIFF{}".format(col, before_day)
                 for idx in range(0, len(self.df)): #각 행을 돌면서
                     before_day_idx = idx - before_day
                     if before_day_idx < 0:
                         this_value = np.nan
-                        this_diff_value = np.nan
                     else:
-                        this_value = self.df.loc[before_day_idx, "{}".format(col)]
-                        this_diff_value = self.df.loc[before_day_idx, "X_{}_DIFF_RATIO".format(col)]
+                        this_value = self.df.loc[idx, "{}".format(col)] - self.df.loc[before_day_idx, "{}".format(col)]
                     result_list.append(this_value)
-                    result_diff_list.append(this_diff_value)
                 result_df = pd.DataFrame({ this_col_name : result_list })
-                result_diff_df = pd.DataFrame({ this_diff_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)
-                self.df = pd.concat([self.df, result_diff_df], axis=1)
         print("\n")
 
-    def makeMA(self, minMA=1, maxMA=11): #단순 이동평균 뿐만 아니라 변동비의 이동평균까지 구한다
+    def makeAR(self, minAR=2, maxAR=11): 
+        # maxAR += 1
+        for idx, col in enumerate(self.cols):
+            print("자기상관 생성중... ({:.2f}%)".format(100*(idx+1)/len(self.cols)), end="\r")
+            for before_day in range(minAR, maxAR):
+                result_list = []
+                # result_diff_list = []
+                this_col_name = "X_{}_AR{}".format(col, before_day)
+                # this_diff_col_name = "X_{}_DIFF_AR{}".format(col, before_day)
+                for idx in range(0, len(self.df)): #각 행을 돌면서
+                    before_day_idx = idx - before_day
+                    if before_day_idx < 0:
+                        this_value = np.nan
+                        # this_diff_value = np.nan
+                    else:
+                        this_value = self.df.loc[before_day_idx, "{}".format(col)]
+                        # this_diff_value = self.df.loc[before_day_idx, "X_{}_DIFF".format(col)]
+                    result_list.append(this_value)
+                    # result_diff_list.append(this_diff_value)
+                result_df = pd.DataFrame({ this_col_name : result_list })
+                # result_diff_df = pd.DataFrame({ this_diff_col_name : result_list })
+                self.df = pd.concat([self.df, result_df], axis=1)
+                # self.df = pd.concat([self.df, result_diff_df], axis=1)
+        print("\n")
+
+    def makeMA(self, minMA=1, maxMA=11):
         maxMA += 2
         pb_max_cnt = len(self.cols) * (maxMA - minMA)
-        for idx, col in enumerate(self.cols):
-            for idx2, mean_period in enumerate(range(minMA, maxMA)):
-                pb_now_cnt = (idx * len(self.cols)) + idx2
+        pb_now_cnt = 0
+        for col in self.cols:
+            for mean_period in range(minMA, maxMA):
+                pb_now_cnt += 1
                 print("이동평균 생성중... ({:.2f}%)".format((100*pb_now_cnt)/pb_max_cnt), end="\r")
 
                 result_list = []
@@ -439,22 +458,22 @@ class DataPreprocessor():
                 result_df = pd.DataFrame({ this_col_name : result_list })
                 self.df = pd.concat([self.df, result_df], axis=1)                
                 
-                result_list = []
-                this_col_name = "X_{}_DIFF_RATIO_MA{}".format(col, mean_period)
-                for idx3 in range(0, len(self.df)): #각 행을 돌면서
-                    if idx3 < mean_period:
-                        this_value = 0.0
-                    else:
-                        this_sum = 0
-                        this_cnt = 0
-                        for before_day in range(-mean_period, 0): #이전 일자의 행들을 돌면서
-                            before_idx = idx3 + before_day
-                            this_sum += self.df.loc[before_idx, "X_{}_DIFF_RATIO".format(col)]
-                            this_cnt += 1
-                        this_value = this_sum/this_cnt
-                    result_list.append(this_value)
-                result_df = pd.DataFrame({ this_col_name : result_list })
-                self.df = pd.concat([self.df, result_df], axis=1)
+                # result_list = []
+                # this_col_name = "X_{}_DIFF_MA{}".format(col, mean_period)
+                # for idx3 in range(0, len(self.df)): #각 행을 돌면서
+                #     if idx3 < mean_period:
+                #         this_value = 0.0
+                #     else:
+                #         this_sum = 0
+                #         this_cnt = 0
+                #         for before_day in range(-mean_period, 0): #이전 일자의 행들을 돌면서
+                #             before_idx = idx3 + before_day
+                #             this_sum += self.df.loc[before_idx, "X_{}_DIFF".format(col)]
+                #             this_cnt += 1
+                #         this_value = this_sum/this_cnt
+                #     result_list.append(this_value)
+                # result_df = pd.DataFrame({ this_col_name : result_list })
+                # self.df = pd.concat([self.df, result_df], axis=1)
         print("\n")
 
     def makeTargetYs(self, next_day_len):

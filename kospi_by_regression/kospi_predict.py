@@ -417,9 +417,10 @@ class DataPreprocessor():
     def makeMA(self, minMA=1, maxMA=11): #단순 이동평균 뿐만 아니라 변동비의 이동평균까지 구한다
         maxMA += 2
         pb_max_cnt = len(self.cols) * (maxMA - minMA)
-        for idx, col in enumerate(self.cols):
-            for idx2, mean_period in enumerate(range(minMA, maxMA)):
-                pb_now_cnt = (idx * len(self.cols)) + idx2
+        pb_now_cnt = 0
+        for col in self.cols:
+            for mean_period in range(minMA, maxMA):
+                pb_now_cnt += 1
                 print("이동평균 생성중... ({:.2f}%)".format((100*pb_now_cnt)/pb_max_cnt), end="\r")
 
                 result_list = []
