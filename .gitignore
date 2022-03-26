@@ -1,4 +1,5 @@
-kospi_predictor_model/
+kospi_by_regression/kospi_predictor_model/
+kospi_by_cnn/kospi_predictor_model/
 .ipynb_checkpoints/
 .DS_Store
 *.xlsx
