@@ -8,7 +8,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import tensorflowjs as tfjs
+# import tensorflowjs as tfjs
 import requests as requests
 import matplotlib.pyplot as plt
 
@@ -60,7 +60,12 @@ class Crawler():
                 },
                 "map_for_df" : [
                     {"col" : "date", "item_key" : "date" },
-                    {"col" : "NASDAQ", "item_key" : "tradePrice" }
+                    {"col" : "NASDAQ", "item_key" : "tradePrice" },
+                    {"col" : "NASDAQ_START", "item_key" : "openingPrice" },
+                    {"col" : "NASDAQ_HIGH", "item_key" : "highPrice" },
+                    {"col" : "NASDAQ_LOW", "item_key" : "lowPrice" },
+                    {"col" : "NASDAQ_VOL", "item_key" : "accTradeVolume" },
+                    {"col" : "NASDAQ_CHANGE", "item_key" : "changePrice" }
                 ]
             },
             "DOW" : {
@@ -72,7 +77,12 @@ class Crawler():
                 },
                 "map_for_df" : [
                     {"col" : "date", "item_key" : "date" },
-                    {"col" : "DOW", "item_key" : "tradePrice" }
+                    {"col" : "DOW", "item_key" : "tradePrice" },
+                    {"col" : "DOW_START", "item_key" : "openingPrice" },
+                    {"col" : "DOW_HIGH", "item_key" : "highPrice" },
+                    {"col" : "DOW_LOW", "item_key" : "lowPrice" },
+                    {"col" : "DOW_VOL", "item_key" : "accTradeVolume" },
+                    {"col" : "DOW_CHANGE", "item_key" : "changePrice" }
                 ]
             },
             "NIKKEI" : {
@@ -84,7 +94,12 @@ class Crawler():
                 },
                 "map_for_df" : [
                     {"col" : "date", "item_key" : "date" },
-                    {"col" : "NIKKEI", "item_key" : "tradePrice" }
+                    {"col" : "NIKKEI", "item_key" : "tradePrice" },
+                    {"col" : "NIKKEI_START", "item_key" : "openingPrice" },
+                    {"col" : "NIKKEI_HIGH", "item_key" : "highPrice" },
+                    {"col" : "NIKKEI_LOW", "item_key" : "lowPrice" },
+                    {"col" : "NIKKEI_VOL", "item_key" : "accTradeVolume" },
+                    {"col" : "NIKKEI_CHANGE", "item_key" : "changePrice" }
                 ]
             },
             "SHANGHAI" : {
@@ -96,7 +111,12 @@ class Crawler():
                 },
                 "map_for_df" : [
                     {"col" : "date", "item_key" : "date" },
-                    {"col" : "SHANGHAI", "item_key" : "tradePrice" }
+                    {"col" : "SHANGHAI", "item_key" : "tradePrice" },
+                    {"col" : "SHANGHAI_START", "item_key" : "openingPrice" },
+                    {"col" : "SHANGHAI_HIGH", "item_key" : "highPrice" },
+                    {"col" : "SHANGHAI_LOW", "item_key" : "lowPrice" },
+                    {"col" : "SHANGHAI_VOL", "item_key" : "accTradeVolume" },
+                    {"col" : "SHANGHAI_CHANGE", "item_key" : "changePrice" }
                 ]
             },
             "INDI" : {
@@ -141,7 +161,12 @@ class Crawler():
                 },
                 "map_for_df" : [
                     {"col" : "date", "item_key" : "date" },
-                    {"col" : "WTI", "item_key" : "tradePrice" }
+                    {"col" : "WTI", "item_key" : "tradePrice" },
+                    {"col" : "WTI_START", "item_key" : "openingPrice" },
+                    {"col" : "WTI_HIGH", "item_key" : "highPrice" },
+                    {"col" : "WTI_LOW", "item_key" : "lowPrice" },
+                    {"col" : "WTI_VOL", "item_key" : "accTradeVolume" },
+                    {"col" : "WTI_CHANGE", "item_key" : "changePrice" }
                 ]
             }
         }
@@ -177,8 +202,8 @@ class Crawler():
                 "KOSPI_START" : float(item["OPNPRC_IDX"].replace(",", "")),
                 "KOSPI_HIGH" : float(item["HGPRC_IDX"].replace(",", "")),
                 "KOSPI_LOW" : float(item["LWPRC_IDX"].replace(",", "")),
-                "KOSPI_TRADE_VOL" : float(item["ACC_TRDVOL"].replace(",", "")),
-                "KOSPI_TRADE_VAL" : float(item["ACC_TRDVAL"].replace(",", "")),
+                "KOSPI_VOL" : float(item["ACC_TRDVOL"].replace(",", "")),
+                "KOSPI_VAL" : float(item["ACC_TRDVAL"].replace(",", "")),
                 "KOSPI_HIGH_LOW_GAP" : float(item["LWPRC_IDX"].replace(",", "")) - float(item["HGPRC_IDX"].replace(",", ""))
             }
             result.append(this_dic)
@@ -195,9 +220,7 @@ class Crawler():
         
         for want_data_name in want_data_names:
             want_data_name_for_print = want_data_name
-            if want_data_name in ["FOREIGN", "ORG"]:
-                want_data_name = "INDI"
-            elif want_data_name in ["KOSPI", "KOSPI_START", "KOSPI_TRADE_VOL", "KOSPI_TRADE_VAL", "KOSPI_HIGH", "KOSPI_LOW", "KOSPI_HIGH_LOW_GAP"]:
+            if want_data_name in ["KOSPI", "KOSPI_START", "KOSPI_TRADE_VOL", "KOSPI_TRADE_VAL", "KOSPI_HIGH", "KOSPI_LOW", "KOSPI_HIGH_LOW_GAP"]:
                 print("\n{} : 데이터 수집중...".format(want_data_name_for_print), end="\r")
                 if self.df is None or want_data_name not in self.df.columns.to_list():
                     this_df = self.crawlDataKOSPI()
@@ -205,6 +228,8 @@ class Crawler():
                         self.df = this_df
                     else:
                         self.df = self.df.merge(this_df, how="left", on="date")
+                continue
+            elif want_data_name not in self.info_for_crawl.keys():
                 continue
 
             result = []
@@ -217,8 +242,8 @@ class Crawler():
 
                 print("{}{} : {}번째 페이지 데이터 수집중...".format(print_prefix, want_data_name_for_print, page_no), end="\r")
 
-                if want_data_name in ["INDI", "FOREIGN", "ORG"] and want_data_name not in self.df.columns.to_list():
-                    continue
+                # if want_data_name in ["INDI", "FOREIGN", "ORG"] and want_data_name not in self.df.columns.to_list():
+                #     continue
                 
                 param["page"] = page_no
 
